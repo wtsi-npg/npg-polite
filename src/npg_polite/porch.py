@@ -20,7 +20,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Self
+from typing import Generic, Self, TypeVar
 from urllib.parse import urljoin
 
 import requests
@@ -108,7 +108,20 @@ class Task(ABC):
         raise NotImplementedError
 
 
-class Pipeline[T: Task = Task]:
+# After we remove Python 3.11, change from:
+#
+# T = TypeVar("T", bound=Task)
+#
+# class Pipeline(Generic[T]):
+#
+# to:
+#
+# class Pipeline[T: Task = Task]:
+
+T = TypeVar("T", bound=Task)
+
+
+class Pipeline(Generic[T]):
     """A Porch "pipeline".
 
     A Porch pipeline is type of pub/sub queue where tasks are added by one process and

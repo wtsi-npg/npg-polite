@@ -38,7 +38,7 @@ def porch_server_available() -> bool:
     try:
         response = requests.request("GET", config.url, timeout=5)
         return response.status_code == 200
-    except requests.ConnectionError, HTTPError:
+    except (requests.ConnectionError, HTTPError):
         return False
     except Exception:
         raise
