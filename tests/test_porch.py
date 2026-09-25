@@ -22,7 +22,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from npg.conf import IniData
-from pytest import mark as m
+from pytest import mark as m, raises
 
 from conftest import TEST_CONFIG_FILE, TEST_CONFIG_SECTION, porch_server_available
 from npg_polite import version
@@ -66,6 +66,70 @@ class ExampleTask(Task):
 
     def __repr__(self):
         return f"ExampleTask({self.item}, {self.quantity}, {self.price}, {self.uuid})"
+
+
+class OtherExampleTask(ExampleTask):
+    pass
+
+
+@m.describe("Porch Task")
+class TestPorchTask:
+    @m.context("When two tasks have the same concrete type and serializable input")
+    @m.it("Considers the tasks equal")
+    def test_same_input_equal(self):
+        task1 = ExampleTask(
+            item="bread", quantity=2, price=Decimal("4.20"), uuid="same"
+        )
+        task2 = ExampleTask(
+            item="bread", quantity=2, price=Decimal("4.20"), uuid="same"
+        )
+
+        assert task1 == task2
+
+    @m.context("When two tasks have different serializable input")
+    @m.it("Considers the tasks unequal")
+    def test_different_input_not_equal(self):
+        task1 = ExampleTask(
+            item="bread", quantity=2, price=Decimal("4.20"), uuid="same"
+        )
+        task2 = ExampleTask(
+            item="bread", quantity=3, price=Decimal("4.20"), uuid="same"
+        )
+
+        assert task1 != task2
+
+    @m.context("When two tasks have the same serializable input but different types")
+    @m.it("Considers the tasks unequal")
+    def test_different_concrete_type_not_equal(self):
+        task1 = ExampleTask(
+            item="bread", quantity=2, price=Decimal("4.20"), uuid="same"
+        )
+        task2 = OtherExampleTask(
+            item="bread", quantity=2, price=Decimal("4.20"), uuid="same"
+        )
+
+        assert task1 != task2
+
+    @m.context("When two tasks have the same serializable input but different status")
+    @m.it("Considers the tasks equal")
+    def test_status_not_part_of_identity(self):
+        task1 = ExampleTask(
+            item="bread", quantity=2, price=Decimal("4.20"), uuid="same"
+        )
+        task2 = ExampleTask(
+            item="bread", quantity=2, price=Decimal("4.20"), uuid="same"
+        )
+        task2.status = Task.Status.RUNNING
+
+        assert task1 == task2
+
+    @m.context("When hashing a task")
+    @m.it("Raises a TypeError")
+    def test_task_is_unhashable(self):
+        task = ExampleTask(item="bread", quantity=2, price=Decimal("4.20"))
+
+        with raises(TypeError):
+            hash(task)
 
 
 @m.describe("Porch Pipeline")
