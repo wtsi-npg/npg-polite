@@ -20,10 +20,11 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Generic, Self, TypeVar
+from typing import Any, Self, cast
 from urllib.parse import urljoin
 
 import requests
+from requests import Response
 from structlog import get_logger
 
 
@@ -37,11 +38,23 @@ For a request/response-centric API, see https://github.com/wtsi-npg/npg_porch_cl
 """
 
 
+class PoliteError(Exception):
+    pass
+
+
+class PolitePrivilegeError(PoliteError):
+    pass
+
+
 class Task(ABC):
     """A Porch task i.e. an instance of a pipeline to be executed.
 
-    The identity of a Porch task is defined by the pipeline name and version, plus
-    the attributes and values of the task input.
+    The Python identity of a Porch task is defined by its concrete task class plus
+    the attributes and values of the task input. A task's status is lifecycle state
+    and is not part of its identity.
+
+    Porch server-side task uniqueness is scoped by the pipeline data sent by
+    `Pipeline._to_serializable()`.
 
     To define a new kind of Task, you need to create a subclass of 'Task'
     and implement a 'to_serializable' method, which returns the Porch task input,
@@ -87,46 +100,34 @@ class Task(ABC):
             raise ValueError("status cannot be None")
         self.status = status
 
-    def __eq__(self, other):
+    def __eq__(self, other: object):
         if not isinstance(other, Task):
-            return False
+            return NotImplemented
 
-        return self.to_serializable() == other.to_serializable()
+        return type(self) is type(other) and (
+            self.to_serializable() == other.to_serializable()
+        )
 
-    def __hash__(self):
-        return hash(self.to_serializable())
+    __hash__ = cast(Any, None)  # Make instances unhashable
 
     @abstractmethod
-    def to_serializable(self) -> dict:
+    def to_serializable(self) -> dict[str, Any]:
         """Return a JSON-serializable dictionary of the task input."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def from_serializable(cls, serializable: dict):
+    def from_serializable(cls, serializable: dict[str, Any]):
         """Create a new task from a JSON-serializable dictionary."""
         raise NotImplementedError
 
 
-# After we remove Python 3.11, change from:
-#
-# T = TypeVar("T", bound=Task)
-#
-# class Pipeline(Generic[T]):
-#
-# to:
-#
-# class Pipeline[T: Task = Task]:
-
-T = TypeVar("T", bound=Task)
-
-
-class Pipeline(Generic[T]):
+class Pipeline[T: Task = Task]:
     """A Porch "pipeline".
 
     A Porch pipeline is type of pub/sub queue where tasks are added by one process and
     later claimed and processed by another. The identity of a Porch pipeline is defined
-    by the pipeline name, URI and version.
+    by the pipeline name, URI, and version.
 
     When a new pipeline is created, it must be registered with the Porch server before
     tasks can be added to it. This is done using the `register` method. Once registered,
@@ -226,8 +227,15 @@ class Pipeline(Generic[T]):
         url: str
         """The base URL of the Porch server."""
 
-        pipeline_token: str = field(repr=False, default=None)
-        admin_token: str = field(repr=False, default=None)
+        pipeline_token: str | None = field(repr=False, default=None)
+        admin_token: str | None = field(repr=False, default=None)
+
+    name: str
+    uri: str
+    version: str
+    config: ServerConfig
+
+    timeout: float | int
 
     def __init__(
         self, cls: type[T], name: str, uri: str, version: str, config: ServerConfig
@@ -271,7 +279,7 @@ class Pipeline(Generic[T]):
 
         self.timeout = 10
 
-    def register(self, update_config=False) -> Self:
+    def register(self, update_config: bool = False) -> Self:
         """Register the pipeline with a Porch server.
 
         This needs to be done only once for each pipeline (i.e. unique name, URI, and
@@ -287,6 +295,11 @@ class Pipeline(Generic[T]):
         Returns:
             The pipeline object.
         """
+        if self.config.admin_token is None:
+            raise PolitePrivilegeError(
+                "Cannot register pipelines; no admin token is set"
+            )
+
         body = self._to_serializable()
 
         create_headers = self._headers(self.config.admin_token)
@@ -344,6 +357,11 @@ class Pipeline(Generic[T]):
         Returns:
             The token string.
         """
+        if self.config.admin_token is None:
+            raise PolitePrivilegeError(
+                "Cannot create a new pipeline token; no admin token is set"
+            )
+
         url = urljoin(self._pipeline_endpoint(), f"{self.name}/token/{token_desc}")
         headers = self._headers(self.config.admin_token)
 
@@ -363,6 +381,11 @@ class Pipeline(Generic[T]):
         Returns:
             True if the task was added, False if it already exists.
         """
+        if self.config.pipeline_token is None:
+            raise PolitePrivilegeError(
+                "Cannot add a new task; no pipeline token is set"
+            )
+
         url = self._task_endpoint()
         headers = self._headers(self.config.pipeline_token)
         body = self._to_serializable(task)
@@ -410,6 +433,9 @@ class Pipeline(Generic[T]):
         Returns:
             The claimed tasks.
         """
+        if self.config.pipeline_token is None:
+            raise PolitePrivilegeError("Cannot claim a task; no pipeline token is set")
+
         logger().info("Task claim", num=num)
         url = self._task_endpoint() + f"claim/?num_tasks={num}"
         headers = self._headers(self.config.pipeline_token)
@@ -457,6 +483,9 @@ class Pipeline(Generic[T]):
 
     def _get_tasks(self, status: Task.Status | None = None) -> list[T]:
         """Get all tasks for this pipeline with an optional status filter."""
+        if self.config.pipeline_token is None:
+            raise PolitePrivilegeError("Cannot get tasks; no pipeline token is set")
+
         url = self._task_endpoint() + f"?pipeline_name={self.name}"
         if status is not None:
             url += f"&status={status.value}"
@@ -469,6 +498,9 @@ class Pipeline(Generic[T]):
 
     def _update_task(self, task: T) -> T:
         """Update the status of a task and return it."""
+        if self.config.pipeline_token is None:
+            raise PolitePrivilegeError("Cannot update tasks; no pipeline token is set")
+
         url = self._task_endpoint()
         headers = self._headers(self.config.pipeline_token)
         body = self._to_serializable(task)
@@ -478,7 +510,7 @@ class Pipeline(Generic[T]):
 
         return self._from_serializable(response.json())
 
-    def _to_serializable(self, task: T | None = None) -> dict:
+    def _to_serializable(self, task: T | None = None) -> dict[str, Any]:
         """Convert task information to a JSON-serializable dictionary, ready to send
         to a Porch server."""
         pipeline = {
@@ -498,7 +530,7 @@ class Pipeline(Generic[T]):
 
         return serializable
 
-    def _from_serializable(self, serializable: dict) -> T:
+    def _from_serializable(self, serializable: dict[str, Any]) -> T:
         """Create a task from a JSON-serializable dictionary received from a Porch
         server."""
         task = self.cls.from_serializable(serializable["task_input"])
@@ -509,7 +541,13 @@ class Pipeline(Generic[T]):
         task.status = status
         return task
 
-    def _request(self, method: str, url: str, headers: dict, body: dict | None = None):
+    def _request(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: dict[str, str] | None = None,
+    ) -> Response:
         """Make an HTTP request to a Porch server.
 
         This method will retry the request up to 3 times with an exponential backoff
@@ -517,7 +555,7 @@ class Pipeline(Generic[T]):
         will be raised.
         """
         num_attempts = 3
-        last_error = None
+        last_error: Exception | None = None
         wait = 15
 
         for attempt in range(num_attempts):
@@ -539,7 +577,10 @@ class Pipeline(Generic[T]):
                 time.sleep(wait)
                 wait *= 2
 
-        raise last_error
+        if last_error is not None:
+            raise last_error
+
+        raise PoliteError("Request processing failed")
 
     def _pipeline_endpoint(self) -> str:
         return urljoin(self.config.url, "pipelines/")
@@ -554,7 +595,7 @@ class Pipeline(Generic[T]):
         return f"Pipeline({self.name}, {self.uri}, {self.version})"
 
     @staticmethod
-    def _headers(token: str) -> dict:
+    def _headers(token: str) -> dict[str, str]:
         return {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",

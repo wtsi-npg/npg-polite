@@ -1,14 +1,14 @@
 services:
   porch-server:
-    image: "ghcr.io/wtsi-npg/python-3.12-npg-porch-2.2.0:latest"
+    image: "ghcr.io/wtsi-npg/python-3.14-npg-porch-3.0:latest"
     restart: always
     ports:
       - "127.0.0.1:8081:8081"
     healthcheck:
-        test: curl -f http://127.0.0.1:8081
-        interval: 10s
-        timeout: 5s
-        retries: 10
+      test: curl -f http://127.0.0.1:8081
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   app:
     build:

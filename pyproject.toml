@@ -16,7 +16,7 @@ classifiers = [
 
 dynamic = ["version"]
 
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 
 dependencies = [
     "requests >=2.34",
@@ -26,6 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
+    "basedpyright >= 1.40",
     "black >=26",
     "pytest >= 9",
     "pytest-it >=0.1.5"
@@ -48,3 +49,17 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools-git-versioning]
 enabled = true
+
+[tool.basedpyright]
+include = ["src"]
+typeCheckingMode = "standard"
+pythonVersion = "3.14"
+pythonPlatform = "Linux"
+
+reportMissingImports = "error"
+reportMissingParameterType = "none"
+reportMissingTypeArgument = "warning"
+reportUnknownArgumentType = "none"
+reportUnknownMemberType = "none"
+reportUnknownParameterType = "none"
+reportUnknownVariableType = "none"
